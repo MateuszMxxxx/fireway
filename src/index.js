@@ -118,7 +118,7 @@ async function trackAsync({log, file, forceWait}, fn) {
 				if (fn && fn[dontTrack]) {
 					return;
 				}
-				
+
 				const name = call.getFileName();
 				if (
 					!name ||
@@ -173,7 +173,7 @@ async function trackAsync({log, file, forceWait}, fn) {
 	const unhandled = reason => rejection = reason;
 	process.once('unhandledRejection', unhandled);
 	process.once('uncaughtException', unhandled);
-	
+
 	try {
 		const res = await fn();
 		await handleCheck();
@@ -229,20 +229,27 @@ async function migrate({path: dir, projectId, storageBucket, dryrun, app, debug 
 	if (!(await exists(dir))) {
 		throw new Error(`No directory at ${dir}`);
 	}
-
 	const filenames = [];
-	for (const file of await readdir(dir)) {
-		if (!(await stat(path.join(dir, file))).isDirectory()) {
-			filenames.push(file);
-		}
-	}
+	fs.readdirSync(dir)
+		.forEach(directory => {
+			if (fs.lstatSync(directory).isDirectory()) {
+				const files = fs.readdirSync(`${dir}/${directory}`);
+				files.filter(file => file.endsWith(".ts"))
+					.forEach(file => {
+					if (fs.lstatSync(`${dir}/${directory}/${file}`).isFile()){
+						filenames.push([file,`${dir}/${directory}`]);
+					}
+				});
+			}
+		});
 
 	// Parse the version numbers from the script filenames
 	const versionToFile = new Map();
-	let files = filenames.map(filename => {
+	let files = filenames.map(fileWithDirectory => {
+		let filename = fileWithDirectory[0];
 		// Skip files that start with a dot
 		if (filename[0] === '.') return;
-		
+
 		const [filenameVersion, description] = filename.split('__');
 		const coerced = semver.coerce(filenameVersion);
 
@@ -269,7 +276,7 @@ async function migrate({path: dir, projectId, storageBucket, dryrun, app, debug 
 
 		return {
 			filename,
-			path: path.join(dir, filename),
+			path: path.join(fileWithDirectory[1], filename),
 			version,
 			description: path.basename(description, path.extname(description))
 		};
@@ -286,7 +293,7 @@ async function migrate({path: dir, projectId, storageBucket, dryrun, app, debug 
 	if (!storageBucket && projectId) {
 		storageBucket = `${projectId}.appspot.com`;
 	}
-	
+
 	const providedApp = app;
 	if (!app) {
 		app = admin.initializeApp({
@@ -325,12 +332,17 @@ async function migrate({path: dir, projectId, storageBucket, dryrun, app, debug 
 	files.sort((f1, f2) => semver.compare(f1.version, f2.version));
 
 	log(`Executing ${files.length} migration files`);
-
+	let previousFileVersion = new semver.SemVer(latest.version);
 	// Execute them in order
 	for (const file of files) {
+		let ver = new semver.SemVer(file.version);
+		if (ver.patch !== 0 && (previousFileVersion.patch + 1) !== ver.patch){
+			throw new Error(`Stopped at first failure - missing migration script before: ${file.filename}`);
+		}
+		previousFileVersion = ver;
 		stats.executedFiles += 1;
 		log('Running', file.filename);
-		
+
 		let migration;
 		try {
 			migration = require(file.path);
