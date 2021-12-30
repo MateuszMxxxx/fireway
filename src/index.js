@@ -232,23 +232,25 @@ async function migrate({path: dir, projectId, storageBucket, dryrun, app, debug 
 	const filenames = [];
 	fs.readdirSync(dir)
 		.forEach(directory => {
-			if (fs.lstatSync(directory).isDirectory()) {
+			if (fs.lstatSync(`${dir}/${directory}`).isDirectory()) {
 				const files = fs.readdirSync(`${dir}/${directory}`);
 				files.filter(file => file.endsWith(".ts"))
 					.forEach(file => {
-					if (fs.lstatSync(`${dir}/${directory}/${file}`).isFile()){
-						filenames.push([file,`${dir}/${directory}`]);
-					}
-				});
+						if (fs.lstatSync(`${dir}/${directory}/${file}`).isFile()) {
+							filenames.push([file, `${dir}/${directory}`]);
+						}
+					});
 			}
 		});
 
 	// Parse the version numbers from the script filenames
 	const versionToFile = new Map();
-	let files = filenames.map(fileWithDirectory => {
+	let files = [];
+	for (let i = 0; i< filenames.length; i++){
+		let fileWithDirectory = filenames[i];
 		let filename = fileWithDirectory[0];
 		// Skip files that start with a dot
-		if (filename[0] === '.') return;
+		if (filename[0] === '.') continue;
 
 		const [filenameVersion, description] = filename.split('__');
 		const coerced = semver.coerce(filenameVersion);
@@ -258,7 +260,7 @@ async function migrate({path: dir, projectId, storageBucket, dryrun, app, debug 
 				// If there's a description, we assume you meant to use this file
 				log(`WARNING: ${filename} doesn't have a valid semver version`);
 			}
-			return null;
+			continue;
 		}
 
 		// If there's a version, but no description, we have an issue
@@ -273,14 +275,15 @@ async function migrate({path: dir, projectId, storageBucket, dryrun, app, debug 
 			throw new Error(`Both ${filename} and ${existingFile} have the same version`);
 		}
 		versionToFile.set(version, filename);
-
-		return {
+		let checksum = await md5(await readFile(path.join(fileWithDirectory[1], filename)));
+		files.push({
 			filename,
 			path: path.join(fileWithDirectory[1], filename),
 			version,
+			checksum: checksum,
 			description: path.basename(description, path.extname(description))
-		};
-	}).filter(Boolean);
+		});
+	}
 
 	stats.scannedFiles = files.length;
 	log(`Found ${stats.scannedFiles} migration files`);
@@ -311,32 +314,41 @@ async function migrate({path: dir, projectId, storageBucket, dryrun, app, debug 
 	// Get the latest migration
 	const result = await collection
 		.orderBy('installed_rank', 'desc')
-		.limit(1)
 		.get();
-	const [latestDoc] = result.docs;
+	result.docs.forEach(snapDoc => {
+		let data = snapDoc.data();
+		let file = files.find(e => e.version === data.version)
+		if (file && data.checksum !== file.checksum) {
+			throw new Error(
+				`Detected change in script ${data.script} that was already executed! Please make sure the changes are correct.`);
+		}
+
+	});
+	const latestDoc = result.docs[0];
 	const latest = latestDoc && latestDoc.data();
 
-	if (latest && !latest.success) {
-		throw new Error(`Migration to version ${latest.version} using ${latest.script} failed! Please restore backups and roll back database and code!`);
+	if (latest && !latest.success && latest.version) {
+		throw new Error(
+			`Migration to version ${latest.version} using ${latest.script} failed! Please restore backups and roll back database and code!`);
 	}
 
 	let installed_rank;
-	if (latest) {
-		files = files.filter(file => semver.gt(file.version, latest.version));
+	if (latest && latest.version) {
+		files = files.filter(file => {
+			return semver.gt(file.version, latest.version)
+		});
 		installed_rank = latest.installed_rank;
 	} else {
 		installed_rank = -1;
 	}
-
 	// Sort them by semver
 	files.sort((f1, f2) => semver.compare(f1.version, f2.version));
-
 	log(`Executing ${files.length} migration files`);
-	let previousFileVersion = new semver.SemVer(latest.version);
+	let previousFileVersion = latest ? new semver.SemVer(latest.version) : null;
 	// Execute them in order
 	for (const file of files) {
 		let ver = new semver.SemVer(file.version);
-		if (ver.patch !== 0 && (previousFileVersion.patch + 1) !== ver.patch){
+		if (previousFileVersion && ver.patch !== 0 && (previousFileVersion.patch + 1) !== ver.patch) {
 			throw new Error(`Stopped at first failure - missing migration script before: ${file.filename}`);
 		}
 		previousFileVersion = ver;
@@ -357,7 +369,7 @@ async function migrate({path: dir, projectId, storageBucket, dryrun, app, debug 
 			try {
 				await migration.migrate({app, firestore, FieldValue, FieldPath, Timestamp, dryrun});
 				return true;
-			} catch(e) {
+			} catch (e) {
 				log(`Error in ${file.filename}`, e);
 				return false;
 			} finally {
