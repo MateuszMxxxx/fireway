@@ -16,6 +16,7 @@ prog
     .option('--projectId', 'Target firebase project')
     .option('--dryrun', 'Simulates changes')
     .option('--forceWait', 'Forces waiting for migrations that do not strictly manage async calls')
+    .option('--collection', 'Collection name where to store flyway documents')
     .describe('Migrates schema to the latest version')
     .example('migrate')
     .example('migrate --path=./my-migrations')

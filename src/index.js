@@ -20,6 +20,7 @@ const exists = util.promisify(fs.exists);
 const statsMap = new Map();
 
 let proxied = false;
+
 function proxyWritableMethods() {
 	// Only proxy once
 	if (proxied) return;
@@ -97,19 +98,23 @@ function proxyWritableMethods() {
 }
 
 const dontTrack = Symbol('Skip async tracking to short circuit');
+
 async function trackAsync({log, file, forceWait}, fn) {
 	// Track filenames for async handles
 	const activeHandles = new Map();
 	const emitter = new EventEmitter();
+
 	function deleteHandle(id) {
 		if (activeHandles.has(id)) {
 			activeHandles.delete(id);
 			emitter.emit('deleted', id);
 		}
 	}
+
 	function waitForDeleted() {
 		return new Promise(r => emitter.once('deleted', () => r()));
 	}
+
 	const hook = asyncHooks.createHook({
 		init(asyncId) {
 			for (const call of callsites()) {
@@ -142,6 +147,7 @@ async function trackAsync({log, file, forceWait}, fn) {
 	}).enable();
 
 	let logged;
+
 	async function handleCheck() {
 		while (activeHandles.size) {
 			if (forceWait) {
@@ -188,16 +194,27 @@ async function trackAsync({log, file, forceWait}, fn) {
 			return false;
 		}
 		return res;
-	} catch(e) {
+	} catch (e) {
 		log(e);
 		return false;
 	} finally {
 		hook.disable();
 	}
 }
+
 trackAsync[dontTrack] = true;
 
-async function migrate({path: dir, projectId, storageBucket, dryrun, app, debug = false, require: req, forceWait = false} = {}) {
+async function migrate({
+						   path: dir,
+						   projectId,
+						   storageBucket,
+						   dryrun,
+						   collection,
+						   app,
+						   debug = false,
+						   require: req,
+						   forceWait = false
+					   } = {}) {
 	if (req) {
 		try {
 			require(req);
@@ -246,7 +263,7 @@ async function migrate({path: dir, projectId, storageBucket, dryrun, app, debug 
 	// Parse the version numbers from the script filenames
 	const versionToFile = new Map();
 	let files = [];
-	for (let i = 0; i< filenames.length; i++){
+	for (let i = 0; i < filenames.length; i++) {
 		let fileWithDirectory = filenames[i];
 		let filename = fileWithDirectory[0];
 		// Skip files that start with a dot
@@ -309,10 +326,10 @@ async function migrate({path: dir, projectId, storageBucket, dryrun, app, debug 
 	const firestore = new Firestore({projectId});
 	firestore._fireway_stats = stats;
 
-	const collection = firestore.collection('fireway');
+	const collectionReference = firestore.collection(collection ?? 'fireway');
 
 	// Get the latest migration
-	const result = await collection
+	const result = await collectionReference
 		.orderBy('installed_rank', 'desc')
 		.get();
 	result.docs.forEach(snapDoc => {
@@ -385,7 +402,7 @@ async function migrate({path: dir, projectId, storageBucket, dryrun, app, debug 
 
 		installed_rank += 1;
 		const id = `${installed_rank}-${file.version}-${file.description}`;
-		await collection.doc(id).set({
+		await collectionReference.doc(id).set({
 			installed_rank,
 			description: file.description,
 			version: file.version,
