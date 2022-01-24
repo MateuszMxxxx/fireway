@@ -326,7 +326,7 @@ async function migrate({
 	const firestore = new Firestore({projectId});
 	firestore._fireway_stats = stats;
 
-	const collectionReference = firestore.collection(collection ?? 'fireway');
+	const collectionReference = firestore.collection(collection);
 
 	// Get the latest migration
 	const result = await collectionReference
