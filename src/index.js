@@ -361,14 +361,7 @@ async function migrate({
 	// Sort them by semver
 	files.sort((f1, f2) => semver.compare(f1.version, f2.version));
 	log(`Executing ${files.length} migration files`);
-	let previousFileVersion = latest ? new semver.SemVer(latest.version) : null;
-	// Execute them in order
 	for (const file of files) {
-		let ver = new semver.SemVer(file.version);
-		if (previousFileVersion && ver.patch !== 0 && (previousFileVersion.patch + 1) !== ver.patch) {
-			throw new Error(`Stopped at first failure - missing migration script before: ${file.filename}`);
-		}
-		previousFileVersion = ver;
 		stats.executedFiles += 1;
 		log('Running', file.filename);
 
